@@ -1,0 +1,1553 @@
+<!DOCTYPE html>
+<!--
+  NutriTrack – Daily Food & Protein Tracker
+  ==========================================
+  Security notes:
+    - Vue 3 template interpolation ({{ }}) is used exclusively for user data;
+      it auto-escapes all values, preventing XSS.
+    - v-html is NOT used anywhere in this file.
+    - No innerHTML assignments; all DOM text is set via Vue's reactive binding
+      or textContent.
+    - CDN assets are loaded with Subresource Integrity (SRI) hashes pinned to
+      exact patch versions.
+    - Content Security Policy is set via <meta> tag restricting script/style
+      sources to the listed CDNs and 'self'.
+    - No auth tokens are stored in localStorage (no auth in this personal app
+      single-user scenario).
+    - NOTE: Update SRI hashes if you upgrade CDN versions.
+
+  TODO(security): Add an API-key header when the backend is exposed beyond
+                  localhost (e.g., via nginx on Raspberry Pi).
+  TODO(security): Enforce HTTPS when serving from Raspberry Pi externally.
+-->
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description"
+    content="Track your daily food and protein intake with NutriTrack – a lightweight PWA for Raspberry Pi." />
+
+  <!--
+    CSP: restrict script sources to trusted CDNs; allow inline styles.
+    'unsafe-inline' is required for style-src because:
+      (a) this file contains an inline <style> block, and
+      (b) Tailwind Play CDN is a JIT compiler that injects <style> tags
+          at runtime — it cannot be hashed or nonced.
+    'unsafe-inline' for styles is lower-risk than for scripts (no code
+    execution); this trade-off is documented and intentional.
+    TODO(security): If nonce-based CSP is needed, replace Tailwind CDN
+                    with a build-time Tailwind output (no inline injection).
+  -->
+  <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self';
+      script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net 'sha256-eVd23vGEQiR1D8cIn8tl1xyvJLdiGmzFCA4oFMeNvgk=';
+      style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net;
+      font-src 'self' https://fonts.gstatic.com;
+      connect-src 'self' http://localhost:8001 http://127.0.0.1:8001 http://minidora.lan:8001;
+      img-src 'self' data:;
+      object-src 'none';
+      frame-ancestors 'none';
+    " />
+
+
+
+
+  <!-- Clickjacking protection -->
+  <meta http-equiv="X-Frame-Options" content="DENY" />
+
+  <title>NutriTrack – Daily Protein Tracker</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="theme-color" content="#6c63ff" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+  <!-- Google Fonts – Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+    rel="stylesheet" />
+
+  <!--
+    Tailwind CSS Play CDN – JIT compiler, no build step required.
+    SRI hash is intentionally omitted: the Play CDN generates styles
+    dynamically at runtime (output varies per page), so a static hash
+    cannot verify it. Use a production Tailwind build + SRI if stricter
+    security is needed.
+    TODO(security): Replace with a pre-built Tailwind stylesheet for
+                    production deployments that require strict SRI.
+  -->
+  <!-- <script src="https://cdn.tailwindcss.com" crossorigin="anonymous"></script> -->
+  <script src="./tailwindcss.js"></script>
+
+  <!-- Chart.js (pinned to exact version) -->
+  <!-- NOTE: Update SRI hash when upgrading Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"
+    integrity="sha384-JUh163oCRItcbPme8pYnROHQMC6fNKTBWtRG3I3I0erJkzNgL7uxKlNwcrcFKeqF"
+    crossorigin="anonymous"></script>
+
+  <!-- Vue 3 CDN (pinned to exact version, verified SRI hash) -->
+  <!-- NOTE: Update SRI hash when upgrading Vue. Computed via:
+       curl -sL https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js | openssl dgst -sha384 -binary | openssl base64 -A -->
+  <script src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js"
+    integrity="sha384-6pS1WSZJY7wOk6qQTa9C9U2W1/qzqL7iYoMil7qn9KFeN5fZDAwIExgCd7U5AH+X"
+    crossorigin="anonymous"></script>
+
+  <style>
+    /* -----------------------------------------------------------------------
+       Design tokens & global styles
+    ----------------------------------------------------------------------- */
+    :root {
+      --bg-base: #0f1117;
+      --bg-surface: #1a1d27;
+      --bg-elevated: #23263a;
+      --accent: #6c63ff;
+      --accent-light: #8b85ff;
+      --accent-glow: rgba(108, 99, 255, 0.25);
+      --teal: #00d2c8;
+      --amber: #f59e0b;
+      --rose: #f43f5e;
+      --green: #22c55e;
+      --text-primary: #f0f0f8;
+      --text-secondary: #9b9fc4;
+      --text-muted: #5c617a;
+      --border: rgba(255, 255, 255, 0.07);
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      --radius-xl: 24px;
+      --shadow-glow: 0 0 24px rgba(108, 99, 255, 0.3);
+      --transition: 0.2s ease;
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg-base);
+      color: var(--text-primary);
+      min-height: 100vh;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: var(--bg-surface);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--bg-elevated);
+      border-radius: 999px;
+    }
+
+    /* -----------------------------------------------------------------------
+       Layout
+    ----------------------------------------------------------------------- */
+    #app {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 0 1rem;
+      width: 100%;
+    }
+
+    /* -----------------------------------------------------------------------
+       Header
+    ----------------------------------------------------------------------- */
+    header {
+      background: linear-gradient(135deg, rgba(108, 99, 255, 0.15) 0%, rgba(0, 210, 200, 0.08) 100%);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+
+    .header-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.5rem;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.625rem;
+    }
+
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--accent), var(--teal));
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1rem;
+      box-shadow: var(--shadow-glow);
+    }
+
+    .logo-text {
+      font-size: 1.25rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, var(--accent-light), var(--teal));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .header-date {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    /* -----------------------------------------------------------------------
+       Navigation tabs
+    ----------------------------------------------------------------------- */
+    .tab-nav {
+      display: flex;
+      gap: 0.25rem;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 1rem;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .tab-nav::-webkit-scrollbar {
+      display: none;
+    }
+
+    .tab-btn {
+      padding: 0.75rem 1.25rem;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      font-family: inherit;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color var(--transition), border-color var(--transition);
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .tab-btn:hover {
+      color: var(--text-primary);
+    }
+
+    .tab-btn.active {
+      color: var(--accent-light);
+      border-bottom-color: var(--accent);
+    }
+
+    /* -----------------------------------------------------------------------
+       Main content area
+    ----------------------------------------------------------------------- */
+    main {
+      flex: 1;
+      padding: 1.5rem 1rem 5rem;
+    }
+
+    /* -----------------------------------------------------------------------
+       Cards
+    ----------------------------------------------------------------------- */
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 1.5rem;
+      margin-bottom: 1rem;
+      transition: border-color var(--transition), transform var(--transition);
+    }
+
+    .card:hover {
+      border-color: rgba(108, 99, 255, 0.25);
+    }
+
+    .card-title {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin-bottom: 0.75rem;
+    }
+
+    /* -----------------------------------------------------------------------
+       Protein ring hero
+    ----------------------------------------------------------------------- */
+    .hero-card {
+      background: linear-gradient(135deg, rgba(108, 99, 255, 0.12) 0%, rgba(0, 210, 200, 0.06) 100%);
+      border: 1px solid rgba(108, 99, 255, 0.2);
+      border-radius: var(--radius-xl);
+      padding: 2rem 1.5rem;
+      margin-bottom: 1.25rem;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at 50% 0%, rgba(108, 99, 255, 0.15) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .ring-wrap {
+      position: relative;
+      width: 160px;
+      height: 160px;
+      margin: 0 auto 1.25rem;
+    }
+
+    .ring-svg {
+      transform: rotate(-90deg);
+      width: 100%;
+      height: 100%;
+    }
+
+    .ring-track {
+      fill: none;
+      stroke: rgba(255, 255, 255, 0.06);
+      stroke-width: 12;
+    }
+
+    .ring-progress {
+      fill: none;
+      stroke-width: 12;
+      stroke-linecap: round;
+      transition: stroke-dashoffset 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    .ring-center {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .ring-value {
+      font-size: 2rem;
+      font-weight: 800;
+      line-height: 1;
+      background: linear-gradient(135deg, var(--accent-light), var(--teal));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .ring-unit {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      font-weight: 500;
+      margin-top: 0.125rem;
+    }
+
+    .hero-subtitle {
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+    }
+
+    .goal-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      background: rgba(108, 99, 255, 0.15);
+      border: 1px solid rgba(108, 99, 255, 0.3);
+      color: var(--accent-light);
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.25rem 0.75rem;
+      border-radius: 999px;
+      margin-top: 0.5rem;
+      cursor: pointer;
+      transition: background var(--transition);
+    }
+
+    .goal-badge:hover {
+      background: rgba(108, 99, 255, 0.25);
+    }
+
+    /* -----------------------------------------------------------------------
+       Stats row
+    ----------------------------------------------------------------------- */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .stat-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 1rem;
+      text-align: center;
+      transition: border-color var(--transition), transform var(--transition);
+    }
+
+    .stat-card:hover {
+      border-color: rgba(108, 99, 255, 0.25);
+      transform: translateY(-2px);
+    }
+
+    .stat-value {
+      font-size: 1.4rem;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+
+    .stat-label {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: 0.25rem;
+    }
+
+    /* -----------------------------------------------------------------------
+       Food log form
+    ----------------------------------------------------------------------- */
+    .form-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .form-group.full {
+      grid-column: 1 / -1;
+    }
+
+    .form-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .form-control {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 0.9rem;
+      padding: 0.65rem 0.875rem;
+      border-radius: var(--radius-md);
+      outline: none;
+      transition: border-color var(--transition), box-shadow var(--transition);
+      width: 100%;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+
+    .form-control:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    .form-control::placeholder {
+      color: var(--text-muted);
+    }
+
+    select.form-control {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%239b9fc4'%3E%3Cpath fill-rule='evenodd' d='M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z' clip-rule='evenodd'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 0.75rem center;
+      background-size: 1.25rem;
+      padding-right: 2.5rem;
+    }
+
+    /* Protein preview chip */
+    .protein-preview {
+      background: rgba(108, 99, 255, 0.12);
+      border: 1px solid rgba(108, 99, 255, 0.25);
+      border-radius: var(--radius-md);
+      padding: 0.5rem 0.875rem;
+      font-size: 0.8rem;
+      color: var(--accent-light);
+      font-weight: 600;
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* -----------------------------------------------------------------------
+       Buttons
+    ----------------------------------------------------------------------- */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      border: none;
+      font-family: inherit;
+      font-weight: 600;
+      font-size: 0.875rem;
+      cursor: pointer;
+      border-radius: var(--radius-md);
+      transition: all var(--transition);
+      padding: 0.7rem 1.25rem;
+      line-height: 1;
+      text-decoration: none;
+    }
+
+    .btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent-light));
+      color: #fff;
+      box-shadow: 0 4px 16px rgba(108, 99, 255, 0.35);
+    }
+
+    .btn-primary:not(:disabled):hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(108, 99, 255, 0.5);
+    }
+
+    .btn-primary:not(:disabled):active {
+      transform: translateY(0);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
+
+    .btn-ghost:not(:disabled):hover {
+      border-color: rgba(108, 99, 255, 0.4);
+      color: var(--text-primary);
+      background: rgba(108, 99, 255, 0.08);
+    }
+
+    .btn-danger {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      padding: 0.4rem;
+      border-radius: 8px;
+    }
+
+    .btn-danger:hover {
+      background: rgba(244, 63, 94, 0.12);
+      border-color: rgba(244, 63, 94, 0.3);
+      color: var(--rose);
+    }
+
+    .btn-full {
+      width: 100%;
+    }
+
+    /* -----------------------------------------------------------------------
+       Food log entries list
+    ----------------------------------------------------------------------- */
+    .log-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+
+    .log-item {
+      display: flex;
+      align-items: center;
+      gap: 0.875rem;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 0.875rem 1rem;
+      transition: border-color var(--transition), transform var(--transition);
+      animation: slideIn 0.25s ease;
+    }
+
+    .log-item:hover {
+      border-color: rgba(108, 99, 255, 0.2);
+      transform: translateX(2px);
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateX(-8px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+
+    .log-category-badge {
+      flex-shrink: 0;
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1rem;
+    }
+
+    .log-body {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .log-name {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .log-meta {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.1rem;
+    }
+
+    .log-protein {
+      flex-shrink: 0;
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--accent-light);
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 3rem 1rem;
+      color: var(--text-muted);
+    }
+
+    .empty-state .icon {
+      font-size: 3rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .empty-state p {
+      font-size: 0.875rem;
+    }
+
+    /* -----------------------------------------------------------------------
+       History / Summary view
+    ----------------------------------------------------------------------- */
+    .summary-day {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      margin-bottom: 0.75rem;
+      overflow: hidden;
+      transition: border-color var(--transition);
+    }
+
+    .summary-day:hover {
+      border-color: rgba(108, 99, 255, 0.25);
+    }
+
+    .summary-day-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.875rem 1.125rem;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .summary-day-label {
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
+
+    .summary-day-badge {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--accent-light);
+      background: rgba(108, 99, 255, 0.12);
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+    }
+
+    /* Progress bar in summary */
+    .progress-bar-wrap {
+      height: 4px;
+      background: var(--border);
+      border-radius: 999px;
+      overflow: hidden;
+      margin: 0 1.125rem 0.875rem;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--teal));
+      border-radius: 999px;
+      transition: width 0.5s ease;
+    }
+
+    /* -----------------------------------------------------------------------
+       Chart
+    ----------------------------------------------------------------------- */
+    .chart-wrap {
+      position: relative;
+      height: 240px;
+    }
+
+    /* -----------------------------------------------------------------------
+       Goal modal / overlay
+    ----------------------------------------------------------------------- */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      animation: fadeIn 0.15s ease;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+      }
+
+      to {
+        opacity: 1;
+      }
+    }
+
+    .modal {
+      background: var(--bg-surface);
+      border: 1px solid rgba(108, 99, 255, 0.3);
+      border-radius: var(--radius-xl);
+      padding: 2rem;
+      width: 100%;
+      max-width: 360px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), var(--shadow-glow);
+      animation: slideUp 0.2s ease;
+    }
+
+    @keyframes slideUp {
+      from {
+        opacity: 0;
+        transform: translateY(16px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .modal-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .modal-footer {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 1.25rem;
+    }
+
+    /* -----------------------------------------------------------------------
+       Toast notification
+    ----------------------------------------------------------------------- */
+    .toast-container {
+      position: fixed;
+      bottom: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 200;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+      pointer-events: none;
+    }
+
+    .toast {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 0.7rem 1.25rem;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-primary);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      animation: toastIn 0.25s ease, toastOut 0.25s ease 2.5s forwards;
+      white-space: nowrap;
+    }
+
+    .toast.success {
+      border-color: rgba(34, 197, 94, 0.4);
+      color: var(--green);
+    }
+
+    .toast.error {
+      border-color: rgba(244, 63, 94, 0.4);
+      color: var(--rose);
+    }
+
+    @keyframes toastIn {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes toastOut {
+      from {
+        opacity: 1;
+      }
+
+      to {
+        opacity: 0;
+      }
+    }
+
+    /* -----------------------------------------------------------------------
+       Loading spinner
+    ----------------------------------------------------------------------- */
+    .spinner {
+      width: 20px;
+      height: 20px;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      display: inline-block;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    /* -----------------------------------------------------------------------
+       Responsive tweaks
+    ----------------------------------------------------------------------- */
+    @media (max-width: 480px) {
+      .stats-row {
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.5rem;
+      }
+
+      .stat-value {
+        font-size: 1.15rem;
+      }
+
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .form-group.full {
+        grid-column: 1;
+      }
+    }
+
+    /* Category colour helpers */
+    .cat-meat {
+      background: rgba(239, 68, 68, 0.15);
+      color: #ef4444;
+    }
+
+    .cat-egg {
+      background: rgba(245, 158, 11, 0.15);
+      color: #f59e0b;
+    }
+
+    .cat-milk {
+      background: rgba(34, 197, 94, 0.15);
+      color: #22c55e;
+    }
+
+    .cat-powder {
+      background: rgba(108, 99, 255, 0.15);
+      color: #6c63ff;
+    }
+
+    .cat-custom {
+      background: rgba(0, 210, 200, 0.15);
+      color: #00d2c8;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="app">
+
+    <!-- ===================================================================
+       TOAST NOTIFICATIONS
+  ==================================================================== -->
+    <div class="toast-container" aria-live="polite">
+      <div v-for="toast in toasts" :key="toast.id" :class="['toast', toast.type]">
+        {{ toast.message }}
+      </div>
+    </div>
+
+    <!-- ===================================================================
+       GOAL MODAL
+  ==================================================================== -->
+    <div v-if="showGoalModal" class="modal-overlay" @click.self="showGoalModal = false" role="dialog" aria-modal="true"
+      aria-labelledby="modal-title">
+      <div class="modal">
+        <div class="modal-title" id="modal-title">🎯 Daily Protein Goal</div>
+        <div class="form-group">
+          <label class="form-label" for="goal-input">Target (grams)</label>
+          <input id="goal-input" type="number" class="form-control" v-model.number="goalInput" min="10" max="999"
+            step="5" placeholder="e.g. 150" />
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" style="flex:1" @click="showGoalModal = false">Cancel</button>
+          <button class="btn btn-primary" style="flex:2" @click="saveGoal" id="save-goal-btn">Save Goal</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================================================================
+       HEADER
+  ==================================================================== -->
+    <header>
+      <div class="header-inner container">
+        <div class="logo">
+          <div class="logo-icon">💪</div>
+          <span class="logo-text">NutriTrack</span>
+        </div>
+        <div class="header-date">{{ todayLabel }}</div>
+      </div>
+
+      <!-- Tab navigation -->
+      <nav class="tab-nav container" role="tablist">
+        <button v-for="tab in tabs" :key="tab.id" :id="'tab-' + tab.id" class="tab-btn"
+          :class="{ active: activeTab === tab.id }" role="tab" :aria-selected="activeTab === tab.id"
+          @click="activeTab = tab.id">
+          <span>{{ tab.icon }}</span> {{ tab.label }}
+        </button>
+      </nav>
+    </header>
+
+    <!-- ===================================================================
+       MAIN CONTENT
+  ==================================================================== -->
+    <main>
+      <div class="container">
+
+        <!-- ================================================================
+           TAB: TODAY
+      ================================================================ -->
+        <section v-if="activeTab === 'today'" id="panel-today" role="tabpanel" aria-labelledby="tab-today">
+
+          <!-- Hero protein ring -->
+          <div class="hero-card">
+            <div class="ring-wrap">
+              <svg class="ring-svg" viewBox="0 0 160 160" aria-hidden="true">
+                <circle class="ring-track" cx="80" cy="80" r="68" />
+                <circle class="ring-progress" cx="80" cy="80" r="68" :stroke="ringColor"
+                  :stroke-dasharray="ringCircumference" :stroke-dashoffset="ringOffset" />
+              </svg>
+              <div class="ring-center">
+                <span class="ring-value">{{ todayProtein.toFixed(0) }}</span>
+                <span class="ring-unit">g protein</span>
+              </div>
+            </div>
+
+            <div class="hero-subtitle">
+              <span v-if="dailyGoal > 0 && todayProtein >= dailyGoal" style="color: var(--green);">🎉 Goal
+                reached!</span>
+              <span v-else-if="dailyGoal > 0">{{ (dailyGoal - todayProtein).toFixed(0) }}g remaining</span>
+              <span v-else>No goal set</span>
+            </div>
+
+            <button class="goal-badge" @click="openGoalModal" id="set-goal-btn" aria-label="Set daily protein goal">
+              🎯 Goal: {{ dailyGoal > 0 ? dailyGoal + 'g' : 'Not set' }}
+            </button>
+          </div>
+
+          <!-- Stats row -->
+          <div class="stats-row">
+            <div class="stat-card">
+              <div class="stat-value" style="color: var(--accent-light);">{{ todayEntries.length }}</div>
+              <div class="stat-label">Meals</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" style="color: var(--teal);">{{ todayProtein.toFixed(1) }}</div>
+              <div class="stat-label">Protein g</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" style="color: var(--amber);">{{ goalPercent }}%</div>
+              <div class="stat-label">Goal</div>
+            </div>
+          </div>
+
+          <!-- Add food form -->
+          <div class="form-card">
+            <div class="card-title">➕ Log Food</div>
+            <form @submit.prevent="submitLog" id="log-form">
+              <div class="form-grid">
+                <!-- Category -->
+                <div class="form-group">
+                  <label class="form-label" for="category-select">Category</label>
+                  <select id="category-select" class="form-control" v-model="form.category" required>
+                    <option value="" disabled>Select...</option>
+                    <option v-for="cat in categories" :key="cat.name" :value="cat.name">
+                      {{ cat.emoji }} {{ cat.name }}
+                    </option>
+                  </select>
+                </div>
+
+                <!-- Quantity -->
+                <div class="form-group">
+                  <label class="form-label" for="quantity-input">Qty ({{ selectedCategoryUnit }})</label>
+                  <input id="quantity-input" type="number" class="form-control" v-model.number="form.quantity" min="0.5"
+                    max="9999" step="0.5" placeholder="e.g. 2" required />
+                </div>
+
+                <!-- Note -->
+                <div class="form-group full">
+                  <label class="form-label" for="note-input">Note (optional)</label>
+                  <input id="note-input" type="text" class="form-control" v-model="form.note" maxlength="200"
+                    placeholder="Chicken breast, whey protein..." />
+                </div>
+
+                <!-- Protein preview -->
+                <div class="protein-preview" v-if="form.category && form.quantity > 0">
+                  <span>Estimated protein</span>
+                  <strong>{{ estimatedProtein }}g</strong>
+                </div>
+
+                <!-- Submit -->
+                <div class="form-group full">
+                  <button type="submit" id="submit-log-btn" class="btn btn-primary btn-full"
+                    :disabled="submitting || !form.category || !form.quantity">
+                    <span v-if="submitting" class="spinner"></span>
+                    <span v-else>+ Log Food</span>
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          <!-- Today's log list -->
+          <div class="card">
+            <div class="card-title">📋 Today's Log</div>
+            <div v-if="loadingToday" style="text-align:center; padding:2rem; color: var(--text-muted);">
+              <div class="spinner"></div>
+            </div>
+            <div v-else-if="todayEntries.length === 0" class="empty-state">
+              <div class="icon">🍽️</div>
+              <p>No meals logged today.<br />Start tracking your protein!</p>
+            </div>
+            <ul class="log-list" v-else>
+              <li v-for="entry in todayEntries" :key="entry.id" class="log-item">
+                <div class="log-category-badge" :class="categoryClass(entry.category)" :title="entry.category">
+                  {{ categoryEmoji(entry.category) }}
+                </div>
+                <div class="log-body">
+                  <div class="log-name">{{ entry.note || entry.category }}</div>
+                  <div class="log-meta">{{ entry.quantity }} {{ categoryUnit(entry.category) }} &bull; {{
+                    formatTime(entry.logged_at) }}</div>
+                </div>
+                <div class="log-protein">{{ entry.protein_g }}g</div>
+                <button class="btn btn-danger" :aria-label="'Delete ' + (entry.note || entry.category)"
+                  @click="deleteEntry(entry.id)" :id="'delete-' + entry.id">
+                  <!-- Safe SVG via DOMParser-equivalent inline: only static hardcoded SVG -->
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" width="16" height="16"
+                    aria-hidden="true">
+                    <path fill-rule="evenodd"
+                      d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z"
+                      clip-rule="evenodd" />
+                  </svg>
+                </button>
+              </li>
+            </ul>
+          </div>
+        </section>
+
+        <!-- ================================================================
+           TAB: HISTORY
+      ================================================================ -->
+        <section v-if="activeTab === 'history'" id="panel-history" role="tabpanel" aria-labelledby="tab-history">
+          <div class="card" style="margin-bottom:1.25rem;">
+            <div class="card-title">📊 30-Day Chart</div>
+            <div class="chart-wrap">
+              <canvas id="protein-chart" aria-label="Daily protein intake chart" role="img"></canvas>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">📅 Daily Breakdown</div>
+            <div v-if="loadingSummary" style="text-align:center; padding:2rem; color: var(--text-muted);">
+              <div class="spinner"></div>
+            </div>
+            <div v-else-if="summary.length === 0" class="empty-state">
+              <div class="icon">📉</div>
+              <p>No history yet.<br />Log some meals to see trends!</p>
+            </div>
+            <div v-else>
+              <div v-for="day in summary" :key="day.day" class="summary-day">
+                <div class="summary-day-header" @click="day._open = !day._open">
+                  <span class="summary-day-label">{{ formatDay(day.day) }}</span>
+                  <span class="summary-day-badge">{{ day.total_protein.toFixed(1) }}g</span>
+                </div>
+                <div class="progress-bar-wrap"
+                  :title="day.total_protein.toFixed(1) + 'g of ' + (dailyGoal || 100) + 'g goal'">
+                  <div class="progress-bar-fill"
+                    :style="{ width: Math.min(100, (day.total_protein / (dailyGoal || 100)) * 100) + '%' }"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- =====================================================================
+     Vue 3 Application Logic
+     Security: All user data is rendered via Vue's {{ }} interpolation
+     (auto-escaped). No innerHTML, no v-html, no dangerouslySetInnerHTML.
+===================================================================== -->
+  <script>
+    (function () {
+      'use strict';
+
+      // TODO(security): Update this to your backend's actual host when deploying
+      // to Raspberry Pi on the LAN.  Do NOT use a wildcard or expose to WAN
+      // without authentication.
+      const API_BASE = (window.location.port === '8001' || !window.location.port)
+        ? ''
+        : (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+          ? 'http://127.0.0.1:8001'
+          : `http://${window.location.hostname}:8001`);
+
+      // Protein coefficients (mirroring server-side – used only for preview)
+      const PROTEIN_COEFFICIENTS = {
+        "主餐": 25.0,
+        "雞胸肉": 25.0,
+        "蛋餅": 25.0,
+        "蛋": 7.0,
+        "豆漿": 15.0,
+        "豆製品": 10.0,
+        "少肉餐點": 10.0,
+        "其他": 1.0,
+      };
+
+      const CATEGORIES = [
+        { name: '主餐', emoji: '🥩', unit: '份', cssClass: 'cat-meat' },
+        { name: '雞胸肉', emoji: '🥩', unit: '份', cssClass: 'cat-meat' },
+        { name: '蛋餅', emoji: '🥚', unit: '份', cssClass: 'cat-egg' },
+        { name: '蛋', emoji: '🥚', unit: '份', cssClass: 'cat-egg' },
+        { name: '豆漿', emoji: '🥛', unit: '杯', cssClass: 'cat-milk' },
+        { name: '豆製品', emoji: '💊', unit: '份', cssClass: 'cat-powder' },
+        { name: '少肉餐點', emoji: '💊', unit: '份', cssClass: 'cat-powder' },
+        { name: '其他', emoji: '⚖️', unit: '份', cssClass: 'cat-custom' },
+      ];
+
+      const catMap = {};
+      CATEGORIES.forEach(c => { catMap[c.name] = c; });
+
+      const { createApp, ref, computed, watch, onMounted, nextTick } = Vue;
+
+      createApp({
+        setup() {
+          // ------------------------------------------------------------------
+          // State
+          // ------------------------------------------------------------------
+          const activeTab = ref('today');
+          const todayEntries = ref([]);
+          const summary = ref([]);
+          const loadingToday = ref(false);
+          const loadingSummary = ref(false);
+          const submitting = ref(false);
+          const toasts = ref([]);
+          const showGoalModal = ref(false);
+          const goalInput = ref(150);
+
+          const form = ref({ category: '', quantity: '', note: '' });
+
+          // ------------------------------------------------------------------
+          // Persisted goal (localStorage – not sensitive, not an auth token)
+          // ------------------------------------------------------------------
+          const dailyGoal = ref(parseInt(localStorage.getItem('nt_daily_goal') || '150', 10));
+
+          const tabs = [
+            { id: 'today', icon: '🏠', label: 'Today' },
+            { id: 'history', icon: '📈', label: 'History' },
+          ];
+
+          // ------------------------------------------------------------------
+          // Computed
+          // ------------------------------------------------------------------
+          const todayProtein = computed(() =>
+            todayEntries.value.reduce((acc, e) => acc + e.protein_g, 0)
+          );
+
+          const goalPercent = computed(() => {
+            if (!dailyGoal.value) return 0;
+            return Math.min(100, Math.round((todayProtein.value / dailyGoal.value) * 100));
+          });
+
+          const todayLabel = computed(() =>
+            new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+          );
+
+          const selectedCategoryUnit = computed(() => {
+            const cat = catMap[form.value.category];
+            return cat ? cat.unit : 'unit(s)';
+          });
+
+          const estimatedProtein = computed(() => {
+            const coeff = PROTEIN_COEFFICIENTS[form.value.category] || 0;
+            return (coeff * (parseFloat(form.value.quantity) || 0)).toFixed(1);
+          });
+
+          // Ring
+          const ringCircumference = computed(() => 2 * Math.PI * 68);
+          const ringOffset = computed(() => {
+            const pct = Math.min(1, todayProtein.value / (dailyGoal.value || 150));
+            return ringCircumference.value * (1 - pct);
+          });
+          const ringColor = computed(() => {
+            const pct = goalPercent.value;
+            if (pct >= 100) return '#22c55e';
+            if (pct >= 75) return '#6c63ff';
+            if (pct >= 40) return '#f59e0b';
+            return '#f43f5e';
+          });
+
+          // ------------------------------------------------------------------
+          // API helpers
+          // ------------------------------------------------------------------
+          async function apiFetch(path, options = {}) {
+            const res = await fetch(`${API_BASE}${path}`, {
+              headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+              ...options,
+            });
+            if (!res.ok) {
+              const body = await res.json().catch(() => ({ detail: 'Network error' }));
+              throw new Error(body.detail || 'Request failed');
+            }
+            return res.json();
+          }
+
+          // ------------------------------------------------------------------
+          // Data loading
+          // ------------------------------------------------------------------
+          async function loadToday() {
+            loadingToday.value = true;
+            try {
+              const dateStr = new Date().toISOString().slice(0, 10);
+              todayEntries.value = await apiFetch(`/api/logs?date_filter=${encodeURIComponent(dateStr)}`);
+            } catch (err) {
+              showToast('Could not load today\'s meals.', 'error');
+            } finally {
+              loadingToday.value = false;
+            }
+          }
+
+          async function loadSummary() {
+            loadingSummary.value = true;
+            try {
+              summary.value = await apiFetch('/api/logs/summary');
+            } catch (err) {
+              showToast('Could not load history.', 'error');
+            } finally {
+              loadingSummary.value = false;
+            }
+          }
+
+          // ------------------------------------------------------------------
+          // Submit log entry
+          // ------------------------------------------------------------------
+          async function submitLog() {
+            if (submitting.value) return;
+            submitting.value = true;
+            try {
+              const payload = {
+                category: form.value.category,
+                quantity: parseFloat(form.value.quantity),
+                note: form.value.note.trim() || null,
+              };
+              const created = await apiFetch('/api/logs', {
+                method: 'POST',
+                body: JSON.stringify(payload),
+              });
+              todayEntries.value.unshift(created);
+              form.value = { category: '', quantity: '', note: '' };
+              showToast(`+${created.protein_g}g protein logged! 💪`, 'success');
+            } catch (err) {
+              showToast(err.message || 'Could not save entry.', 'error');
+            } finally {
+              submitting.value = false;
+            }
+          }
+
+          // ------------------------------------------------------------------
+          // Delete entry
+          // ------------------------------------------------------------------
+          async function deleteEntry(id) {
+            try {
+              await apiFetch(`/api/logs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+              todayEntries.value = todayEntries.value.filter(e => e.id !== id);
+              showToast('Entry removed.', 'success');
+            } catch (err) {
+              showToast('Could not delete entry.', 'error');
+            }
+          }
+
+          // ------------------------------------------------------------------
+          // Goal modal
+          // ------------------------------------------------------------------
+          function openGoalModal() {
+            goalInput.value = dailyGoal.value;
+            showGoalModal.value = true;
+          }
+
+          function saveGoal() {
+            const g = parseInt(goalInput.value, 10);
+            if (isNaN(g) || g < 10 || g > 999) {
+              showToast('Please enter a value between 10 and 999.', 'error');
+              return;
+            }
+            dailyGoal.value = g;
+            localStorage.setItem('nt_daily_goal', String(g));
+            showGoalModal.value = false;
+            showToast(`Goal updated to ${g}g!`, 'success');
+          }
+
+          // ------------------------------------------------------------------
+          // Toast helper
+          // ------------------------------------------------------------------
+          let toastId = 0;
+          function showToast(message, type = 'success') {
+            const id = ++toastId;
+            toasts.value.push({ id, message, type });
+            setTimeout(() => {
+              toasts.value = toasts.value.filter(t => t.id !== id);
+            }, 2800);
+          }
+
+          // ------------------------------------------------------------------
+          // Chart
+          // ------------------------------------------------------------------
+          let chartInstance = null;
+
+          async function renderChart() {
+            await nextTick();
+            const canvas = document.getElementById('protein-chart');
+            if (!canvas) return;
+
+            const labels = summary.value.map(d => formatDay(d.day)).reverse();
+            const data = summary.value.map(d => d.total_protein).reverse();
+            const goalArr = data.map(() => dailyGoal.value || null);
+
+            if (chartInstance) { chartInstance.destroy(); }
+
+            const gradient = canvas.getContext('2d').createLinearGradient(0, 0, 0, 240);
+            gradient.addColorStop(0, 'rgba(108,99,255,0.4)');
+            gradient.addColorStop(1, 'rgba(108,99,255,0.0)');
+
+            chartInstance = new Chart(canvas, {
+              type: 'bar',
+              data: {
+                labels,
+                datasets: [
+                  {
+                    label: 'Protein (g)',
+                    data,
+                    backgroundColor: gradient,
+                    borderColor: '#6c63ff',
+                    borderWidth: 2,
+                    borderRadius: 6,
+                    borderSkipped: false,
+                  },
+                  {
+                    label: 'Goal',
+                    data: goalArr,
+                    type: 'line',
+                    borderColor: '#f59e0b',
+                    borderDash: [6, 4],
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    fill: false,
+                    tension: 0,
+                  },
+                ],
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: {
+                    labels: { color: '#9b9fc4', font: { family: 'Inter', size: 12 } },
+                  },
+                  tooltip: {
+                    backgroundColor: '#1a1d27',
+                    borderColor: 'rgba(255,255,255,0.08)',
+                    borderWidth: 1,
+                    titleColor: '#f0f0f8',
+                    bodyColor: '#9b9fc4',
+                    callbacks: {
+                      label: ctx => ` ${ctx.parsed.y?.toFixed(1)}g`,
+                    },
+                  },
+                },
+                scales: {
+                  x: {
+                    grid: { color: 'rgba(255,255,255,0.04)' },
+                    ticks: { color: '#5c617a', font: { family: 'Inter', size: 11 }, maxRotation: 45 },
+                  },
+                  y: {
+                    grid: { color: 'rgba(255,255,255,0.04)' },
+                    ticks: {
+                      color: '#5c617a',
+                      font: { family: 'Inter', size: 11 },
+                      callback: v => v + 'g',
+                    },
+                    beginAtZero: true,
+                  },
+                },
+              },
+            });
+          }
+
+          // ------------------------------------------------------------------
+          // Helpers
+          // ------------------------------------------------------------------
+          function formatTime(iso) {
+            return new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+          }
+
+          function formatDay(dateStr) {
+            const d = new Date(dateStr + 'T00:00:00');
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const diff = Math.round((today - d) / 86400000);
+            if (diff === 0) return 'Today';
+            if (diff === 1) return 'Yesterday';
+            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          }
+
+          function categoryEmoji(name) { return catMap[name]?.emoji || '🍴'; }
+          function categoryClass(name) { return catMap[name]?.cssClass || ''; }
+          function categoryUnit(name) { return catMap[name]?.unit || 'unit(s)'; }
+
+          const categories = CATEGORIES;
+
+          // ------------------------------------------------------------------
+          // Watchers
+          // ------------------------------------------------------------------
+          watch(activeTab, async (tab) => {
+            if (tab === 'history') {
+              await loadSummary();
+              renderChart();
+            }
+          });
+
+          watch(summary, () => {
+            if (activeTab.value === 'history') renderChart();
+          });
+
+          // ------------------------------------------------------------------
+          // Mount
+          // ------------------------------------------------------------------
+          onMounted(() => {
+            loadToday();
+
+            // PWA service worker registration
+            if ('serviceWorker' in navigator) {
+              navigator.serviceWorker.register('./sw.js').catch(() => {
+                // SW registration failure is non-fatal
+              });
+            }
+          });
+
+          return {
+            activeTab, tabs, todayEntries, summary,
+            loadingToday, loadingSummary, submitting, toasts,
+            showGoalModal, goalInput, dailyGoal,
+            form, categories,
+            todayProtein, goalPercent, todayLabel,
+            selectedCategoryUnit, estimatedProtein,
+            ringCircumference, ringOffset, ringColor,
+            submitLog, deleteEntry, openGoalModal, saveGoal,
+            formatTime, formatDay,
+            categoryEmoji, categoryClass, categoryUnit,
+          };
+        },
+      }).mount('#app');
+    })();
+  </script>
+</body>
+
+</html>

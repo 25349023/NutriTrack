@@ -6,5 +6,8 @@ dist/
 wheels/
 *.egg-info
 
+nutrition.db*
+SPEC.md
+
 # Virtual environments
 .venv
