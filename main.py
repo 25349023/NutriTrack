@@ -27,6 +27,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Path, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 # ---------------------------------------------------------------------------
 # Logging – only safe, non-sensitive operational messages
@@ -50,7 +51,7 @@ ALLOWED_ORIGINS: list[str] = [o.strip() for o in _raw_origins.split(",") if o.st
 # Content Security Policy for HTML/static responses
 HTML_CSP = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net 'sha256-eVd23vGEQiR1D8cIn8tl1xyvJLdiGmzFCA4oFMeNvgk='; "
+    "script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net 'sha256-dB1H7BIUG6pRRI+DzmulEOu1sqDGKXVeBIEG8GUol/U='; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
     "font-src 'self' https://fonts.gstatic.com; "
     "connect-src 'self' http://localhost:8001 http://127.0.0.1:8001; "
@@ -60,13 +61,14 @@ HTML_CSP = (
 )
 # Allow-list of valid food categories
 VALID_CATEGORIES = frozenset(
-    ["主餐", "雞胸肉", "蛋餅", "蛋", "豆漿", "豆製品", "少肉餐點", "其他"]
+    ["主餐", "雞胸肉", "蛋餅", "蛋", "三角飯糰", "豆漿", "豆製品", "少肉餐點", "其他"]
 )
 PROTEIN_COEFFICIENTS: dict[str, float] = {
     "主餐": 25.0,
     "雞胸肉": 25.0,
     "蛋餅": 25.0,
     "蛋": 7.0,
+    "三角飯糰": 6.0,
     "豆漿": 15.0,
     "豆製品": 10.0,
     "少肉餐點": 10.0,
@@ -146,10 +148,16 @@ async def add_security_headers(request: Request, call_next):
 # ---------------------------------------------------------------------------
 # Frontend & Static file routes (Explicitly served for security)
 # ---------------------------------------------------------------------------
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 @app.get("/", include_in_schema=False)
 @app.get("/index.html", include_in_schema=False)
 def serve_index():
     return FileResponse("index.html")
+
+@app.get("/favicon.ico", include_in_schema=False)
+def serve_favicon():
+    return FileResponse("static/favicon/favicon.ico")
 
 @app.get("/manifest.json", include_in_schema=False)
 def serve_manifest():
