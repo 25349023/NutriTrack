@@ -41,20 +41,22 @@ logger = logging.getLogger("nutrition_tracker")
 # Configuration
 # ---------------------------------------------------------------------------
 DB_PATH = os.environ.get("NUTRITION_DB_PATH", "nutrition.db")
-# CORS: Restrict to explicit origins.  Override via env var (comma-separated).
-# TODO(security): In production, replace with your real frontend origin(s).
-_raw_origins = os.environ.get(
-    "ALLOWED_ORIGINS",
-    "http://localhost:5500,http://127.0.0.1:5500,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8001,http://127.0.0.1:8001",
-)
-ALLOWED_ORIGINS: list[str] = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+# CORS: Restrict to explicit origins via env var (comma-separated), or allow any localhost port by default.
+_raw_origins = os.environ.get("ALLOWED_ORIGINS")
+if _raw_origins:
+    ALLOWED_ORIGINS: list[str] = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+    ALLOW_ORIGIN_REGEX: Optional[str] = None
+else:
+    ALLOWED_ORIGINS = []
+    ALLOW_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+
 # Content Security Policy for HTML/static responses
 HTML_CSP = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net 'sha256-dB1H7BIUG6pRRI+DzmulEOu1sqDGKXVeBIEG8GUol/U='; "
+    "script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net 'sha256-DL/qC5iLOvTD284aJh1/Tz0nnmyUpg9IgnPUfazjnH0='; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
     "font-src 'self' https://fonts.gstatic.com; "
-    "connect-src 'self' http://localhost:8001 http://127.0.0.1:8001; "
+    "connect-src 'self' http: https:; "
     "img-src 'self' data:; "
     "object-src 'none'; "
     "frame-ancestors 'none';"
@@ -125,6 +127,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=ALLOW_ORIGIN_REGEX,
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Accept"],
