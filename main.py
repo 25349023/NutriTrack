@@ -53,7 +53,7 @@ else:
 # Content Security Policy for HTML/static responses
 HTML_CSP = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net 'sha256-DL/qC5iLOvTD284aJh1/Tz0nnmyUpg9IgnPUfazjnH0='; "
+    "script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net 'sha256-/BnQq/ydob9c0+UT8rtZ4QjtLxIFL9o8n0oUeeXRzSE='; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
     "font-src 'self' https://fonts.gstatic.com; "
     "connect-src 'self' http: https:; "
@@ -181,6 +181,12 @@ class FoodLogCreate(BaseModel):
     category: str = Field(..., min_length=1, max_length=50)
     quantity: float = Field(..., gt=0, le=9999)
     note: Optional[str] = Field(default=None, max_length=200)
+    logged_date: Optional[str] = Field(
+        default=None,
+        description="Optional date override for make-up logging (YYYY-MM-DD). "
+                    "Must be today or in the past (up to 90 days ago). "
+                    "Defaults to current UTC date when omitted.",
+    )
     @field_validator("category")
     @classmethod
     def validate_category(cls, v: str) -> str:
@@ -197,6 +203,22 @@ class FoodLogCreate(BaseModel):
         # Strip control characters; allow safe printable characters only
         sanitized = re.sub(r"[\x00-\x1f\x7f]", "", v).strip()
         return sanitized if sanitized else None
+    @field_validator("logged_date")
+    @classmethod
+    def validate_logged_date(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        try:
+            target = datetime.strptime(v, "%Y-%m-%d").date()
+        except ValueError:
+            raise ValueError("logged_date must be in YYYY-MM-DD format.")
+        today = datetime.now(timezone.utc).date()
+        if target > today:
+            raise ValueError("logged_date cannot be in the future.")
+        max_past = today.__class__.fromordinal(today.toordinal() - 90)
+        if target < max_past:
+            raise ValueError("logged_date cannot be more than 90 days in the past.")
+        return v
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -248,9 +270,19 @@ def get_summary():
     return [dict(row) for row in rows]
 @app.post("/api/logs", status_code=201, summary="Add a food log entry")
 def create_log(body: FoodLogCreate):
-    """Create a new food log entry.  Protein is calculated server-side."""
+    """Create a new food log entry.  Protein is calculated server-side.
+
+    If `logged_date` is provided (YYYY-MM-DD, today or up to 90 days in the
+    past), the entry is recorded at noon UTC on that date to support make-up
+    logging for previous days.  Otherwise the current UTC timestamp is used.
+    """
     protein_g = round(PROTEIN_COEFFICIENTS[body.category] * body.quantity, 2)
-    logged_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if body.logged_date:
+        # Set timestamp to noon UTC on the specified date so that the
+        # date_filter LIKE query still matches correctly.
+        logged_at = f"{body.logged_date}T12:00:00Z"
+    else:
+        logged_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         with get_db() as conn:
             cursor = conn.execute(
@@ -265,7 +297,7 @@ def create_log(body: FoodLogCreate):
     except sqlite3.Error:
         logger.exception("Database error in create_log")
         raise HTTPException(status_code=500, detail="Could not save log entry.")
-    logger.info("Log entry created id=%s category=%s", new_id, body.category)
+    logger.info("Log entry created id=%s category=%s date=%s", new_id, body.category, body.logged_date or "now")
     return {
         "id": new_id,
         "category": body.category,

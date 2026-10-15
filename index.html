@@ -48,7 +48,7 @@
   -->
   <meta http-equiv="Content-Security-Policy" content="
       default-src 'self';
-      script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net 'sha256-DL/qC5iLOvTD284aJh1/Tz0nnmyUpg9IgnPUfazjnH0=';
+      script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net 'sha256-/BnQq/ydob9c0+UT8rtZ4QjtLxIFL9o8n0oUeeXRzSE=';
       style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net;
       font-src 'self' https://fonts.gstatic.com;
       connect-src 'self' http: https:;
@@ -950,6 +950,92 @@
       background: rgba(0, 210, 200, 0.15);
       color: #00d2c8;
     }
+
+    /* -----------------------------------------------------------------------
+       Date navigator
+    ----------------------------------------------------------------------- */
+    .date-nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 0.55rem 0.75rem;
+      margin-bottom: 1.25rem;
+      animation: slideIn 0.2s ease;
+    }
+
+    .date-nav-label {
+      flex: 1;
+      text-align: center;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text);
+      cursor: pointer;
+      position: relative;
+    }
+
+    /* Hide the native date picker but keep it accessible */
+    .date-nav-label input[type="date"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      color-scheme: dark;
+    }
+
+    .date-nav-btn {
+      background: rgba(108,99,255,0.12);
+      border: 1px solid rgba(108,99,255,0.25);
+      color: var(--accent-light);
+      border-radius: var(--radius-md);
+      width: 2.1rem;
+      height: 2.1rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 1rem;
+      transition: background 0.18s, transform 0.12s;
+      flex-shrink: 0;
+    }
+
+    .date-nav-btn:hover {
+      background: rgba(108,99,255,0.22);
+      transform: scale(1.08);
+    }
+
+    .date-nav-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* -----------------------------------------------------------------------
+       Make-up date banner
+    ----------------------------------------------------------------------- */
+    .makeup-banner {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(245, 158, 11, 0.10);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      border-radius: var(--radius-md);
+      padding: 0.55rem 0.875rem;
+      font-size: 0.8rem;
+      color: var(--amber);
+      font-weight: 600;
+      grid-column: 1 / -1;
+      animation: slideIn 0.2s ease;
+    }
+
+    /* Native date input – match the design system */
+    input[type="date"].form-control {
+      color-scheme: dark;
+    }
   </style>
 </head>
 
@@ -1018,6 +1104,24 @@
       ================================================================ -->
         <section v-if="activeTab === 'today'" id="panel-today" role="tabpanel" aria-labelledby="tab-today">
 
+          <!-- Date navigator -->
+          <div class="date-nav" role="navigation" aria-label="Date navigation">
+            <button class="date-nav-btn" id="prev-date-btn" aria-label="Previous day"
+              @click="navigateDate(-1)">‹</button>
+
+            <div class="date-nav-label" id="date-nav-label">
+              {{ viewDateLabel }}
+              <!-- Invisible native date picker overlaid on the label -->
+              <input type="date" id="date-picker-input" :value="viewDateStr"
+                :max="todayDateStr" :min="minDateStr"
+                @change="setViewDate($event.target.value)"
+                aria-label="Pick a date" />
+            </div>
+
+            <button class="date-nav-btn" id="next-date-btn" aria-label="Next day"
+              :disabled="isViewingToday" @click="navigateDate(1)">›</button>
+          </div>
+
           <!-- Hero protein ring -->
           <div class="hero-card">
             <div class="ring-wrap">
@@ -1062,7 +1166,10 @@
 
           <!-- Add food form -->
           <div class="form-card">
-            <div class="card-title">➕ Log Food</div>
+            <div class="card-title">
+              <span v-if="isMakeupDate">⏪ Log Make-up Entry</span>
+              <span v-else>➕ Log Food</span>
+            </div>
             <form @submit.prevent="submitLog" id="log-form">
               <div class="form-grid">
                 <!-- Category -->
@@ -1090,6 +1197,11 @@
                     placeholder="Chicken breast, whey protein..." />
                 </div>
 
+                <!-- Make-up banner -->
+                <div class="makeup-banner" v-if="isMakeupDate">
+                  ⏪ Make-up log for <strong style="margin-left:0.3rem;">{{ viewDateLabel }}</strong>
+                </div>
+
                 <!-- Protein preview -->
                 <div class="protein-preview" v-if="form.category && form.quantity > 0">
                   <span>Estimated protein</span>
@@ -1101,6 +1213,7 @@
                   <button type="submit" id="submit-log-btn" class="btn btn-primary btn-full"
                     :disabled="submitting || !form.category || !form.quantity">
                     <span v-if="submitting" class="spinner"></span>
+                    <span v-else-if="isMakeupDate">⏪ Log Make-up Entry</span>
                     <span v-else>+ Log Food</span>
                   </button>
                 </div>
@@ -1108,15 +1221,16 @@
             </form>
           </div>
 
-          <!-- Today's log list -->
+          <!-- Log list -->
           <div class="card">
-            <div class="card-title">📋 Today's Log</div>
+            <div class="card-title">📋 {{ isViewingToday ? "Today's" : viewDateLabel + "'s" }} Log</div>
             <div v-if="loadingToday" style="text-align:center; padding:2rem; color: var(--text-muted);">
               <div class="spinner"></div>
             </div>
             <div v-else-if="todayEntries.length === 0" class="empty-state">
               <div class="icon">🍽️</div>
-              <p>No meals logged today.<br />Start tracking your protein!</p>
+              <p v-if="isViewingToday">No meals logged today.<br />Start tracking your protein!</p>
+              <p v-else>No entries for {{ viewDateLabel }}.<br />Use the form above to add a make-up entry!</p>
             </div>
             <ul class="log-list" v-else>
               <li v-for="entry in todayEntries" :key="entry.id" class="log-item">
@@ -1243,6 +1357,23 @@
           const showGoalModal = ref(false);
           const goalInput = ref(150);
 
+          // ------------------------------------------------------------------
+          // Date helpers (defined early – used by form initializer below)
+          // ------------------------------------------------------------------
+          function getLocalDateStr(offsetDays = 0) {
+            const d = new Date();
+            d.setDate(d.getDate() + offsetDays);
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+          }
+          const todayDateStr = getLocalDateStr(0);
+          const minDateStr   = getLocalDateStr(-90); // 90-day window matches server validation
+
+          // The date currently being viewed / logged (defaults to today)
+          const viewDateStr = ref(todayDateStr);
+
           const form = ref({ category: '', quantity: '', note: '' });
 
           // ------------------------------------------------------------------
@@ -1258,6 +1389,11 @@
           // ------------------------------------------------------------------
           // Computed
           // ------------------------------------------------------------------
+          const isViewingToday = computed(() => viewDateStr.value === todayDateStr);
+          const isMakeupDate   = computed(() => !isViewingToday.value);
+
+          const viewDateLabel = computed(() => formatDay(viewDateStr.value));
+
           const todayProtein = computed(() =>
             todayEntries.value.reduce((acc, e) => acc + e.protein_g, 0)
           );
@@ -1316,12 +1452,27 @@
           async function loadToday() {
             loadingToday.value = true;
             try {
-              const dateStr = new Date().toISOString().slice(0, 10);
-              todayEntries.value = await apiFetch(`/api/logs?date_filter=${encodeURIComponent(dateStr)}`);
+              todayEntries.value = await apiFetch(`/api/logs?date_filter=${encodeURIComponent(viewDateStr.value)}`);
             } catch (err) {
-              showToast('Could not load today\'s meals.', 'error');
+              showToast('Could not load meals.', 'error');
             } finally {
               loadingToday.value = false;
+            }
+          }
+
+          // Navigate by +/- days; clamp at today and minDateStr
+          function navigateDate(delta) {
+            const d = new Date(viewDateStr.value + 'T00:00:00');
+            d.setDate(d.getDate() + delta);
+            const newStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+            if (newStr >= minDateStr && newStr <= todayDateStr) {
+              viewDateStr.value = newStr;
+            }
+          }
+
+          function setViewDate(str) {
+            if (str && str >= minDateStr && str <= todayDateStr) {
+              viewDateStr.value = str;
             }
           }
 
@@ -1347,14 +1498,21 @@
                 category: form.value.category,
                 quantity: parseFloat(form.value.quantity),
                 note: form.value.note.trim() || null,
+                // Pass logged_date only for make-up entries (not today)
+                logged_date: isMakeupDate.value ? viewDateStr.value : null,
               };
               const created = await apiFetch('/api/logs', {
                 method: 'POST',
                 body: JSON.stringify(payload),
               });
+              // Prepend to the currently viewed list
               todayEntries.value.unshift(created);
               form.value = { category: '', quantity: '', note: '' };
-              showToast(`+${created.protein_g}g protein logged! 💪`, 'success');
+              if (isMakeupDate.value) {
+                showToast(`⏪ +${created.protein_g}g saved for ${viewDateLabel.value}!`, 'success');
+              } else {
+                showToast(`+${created.protein_g}g protein logged! 💪`, 'success');
+              }
             } catch (err) {
               showToast(err.message || 'Could not save entry.', 'error');
             } finally {
@@ -1524,6 +1682,11 @@
             }
           });
 
+          // Reload entries whenever the viewed date changes
+          watch(viewDateStr, () => {
+            loadToday();
+          });
+
           watch(summary, () => {
             if (activeTab.value === 'history') renderChart();
           });
@@ -1549,6 +1712,9 @@
             form, categories,
             todayProtein, goalPercent, todayLabel,
             selectedCategoryUnit, estimatedProtein,
+            isMakeupDate, isViewingToday,
+            viewDateStr, viewDateLabel, todayDateStr, minDateStr,
+            navigateDate, setViewDate,
             ringCircumference, ringOffset, ringColor,
             submitLog, deleteEntry, openGoalModal, saveGoal,
             formatTime, formatDay,
