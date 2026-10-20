@@ -53,7 +53,7 @@ else:
 # Content Security Policy for HTML/static responses
 HTML_CSP = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net 'sha256-/BnQq/ydob9c0+UT8rtZ4QjtLxIFL9o8n0oUeeXRzSE='; "
+    "script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net 'sha256-pBQio4wRLEeQEwfPLL7pwjp4NhBIipgCUNFr8ZEE9wk='; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
     "font-src 'self' https://fonts.gstatic.com; "
     "connect-src 'self' http: https:; "

@@ -48,7 +48,7 @@
   -->
   <meta http-equiv="Content-Security-Policy" content="
       default-src 'self';
-      script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net 'sha256-/BnQq/ydob9c0+UT8rtZ4QjtLxIFL9o8n0oUeeXRzSE=';
+      script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net 'sha256-pBQio4wRLEeQEwfPLL7pwjp4NhBIipgCUNFr8ZEE9wk=';
       style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net;
       font-src 'self' https://fonts.gstatic.com;
       connect-src 'self' http: https:;
@@ -988,8 +988,8 @@
     }
 
     .date-nav-btn {
-      background: rgba(108,99,255,0.12);
-      border: 1px solid rgba(108,99,255,0.25);
+      background: rgba(108, 99, 255, 0.12);
+      border: 1px solid rgba(108, 99, 255, 0.25);
       color: var(--accent-light);
       border-radius: var(--radius-md);
       width: 2.1rem;
@@ -1004,7 +1004,7 @@
     }
 
     .date-nav-btn:hover {
-      background: rgba(108,99,255,0.22);
+      background: rgba(108, 99, 255, 0.22);
       transform: scale(1.08);
     }
 
@@ -1112,14 +1112,12 @@
             <div class="date-nav-label" id="date-nav-label">
               {{ viewDateLabel }}
               <!-- Invisible native date picker overlaid on the label -->
-              <input type="date" id="date-picker-input" :value="viewDateStr"
-                :max="todayDateStr" :min="minDateStr"
-                @change="setViewDate($event.target.value)"
-                aria-label="Pick a date" />
+              <input type="date" id="date-picker-input" :value="viewDateStr" :max="todayDateStr" :min="minDateStr"
+                @change="setViewDate($event.target.value)" aria-label="Pick a date" />
             </div>
 
-            <button class="date-nav-btn" id="next-date-btn" aria-label="Next day"
-              :disabled="isViewingToday" @click="navigateDate(1)">›</button>
+            <button class="date-nav-btn" id="next-date-btn" aria-label="Next day" :disabled="isViewingToday"
+              @click="navigateDate(1)">›</button>
           </div>
 
           <!-- Hero protein ring -->
@@ -1369,7 +1367,7 @@
             return `${y}-${m}-${day}`;
           }
           const todayDateStr = getLocalDateStr(0);
-          const minDateStr   = getLocalDateStr(-90); // 90-day window matches server validation
+          const minDateStr = getLocalDateStr(-90); // 90-day window matches server validation
 
           // The date currently being viewed / logged (defaults to today)
           const viewDateStr = ref(todayDateStr);
@@ -1390,7 +1388,7 @@
           // Computed
           // ------------------------------------------------------------------
           const isViewingToday = computed(() => viewDateStr.value === todayDateStr);
-          const isMakeupDate   = computed(() => !isViewingToday.value);
+          const isMakeupDate = computed(() => !isViewingToday.value);
 
           const viewDateLabel = computed(() => formatDay(viewDateStr.value));
 
@@ -1464,7 +1462,7 @@
           function navigateDate(delta) {
             const d = new Date(viewDateStr.value + 'T00:00:00');
             d.setDate(d.getDate() + delta);
-            const newStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+            const newStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
             if (newStr >= minDateStr && newStr <= todayDateStr) {
               viewDateStr.value = newStr;
             }
@@ -1675,6 +1673,11 @@
           // ------------------------------------------------------------------
           // Watchers
           // ------------------------------------------------------------------
+          // Auto-set quantity to 1 when a category is selected
+          watch(() => form.value.category, (newCat) => {
+            if (newCat) form.value.quantity = 1;
+          });
+
           watch(activeTab, async (tab) => {
             if (tab === 'history') {
               await loadSummary();
